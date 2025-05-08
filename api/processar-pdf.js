@@ -51,7 +51,7 @@ module.exports = async (req, res) => {
         "https://www.limpaimovel.com.br/_functions/salvarImagemBase64",
         {
           nomeArquivo: `matricula_page_${index + 1}.png`,
-          base64
+          base64: `data:image/png;base64,${base64}`
         },
         {
           headers: {
