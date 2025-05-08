@@ -77,6 +77,7 @@ Se não souber alguma informação, use null. Nunca quebre o formato JSON.
 
     // 5. Retornar texto (Wix irá tentar converter para JSON se possível)
     res.status(200).json({ analise: resultado });
+    
 
   } catch (error) {
     console.error("❌ Erro completo:", error);
