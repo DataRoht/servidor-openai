@@ -23,7 +23,7 @@ module.exports = async (req, res) => {
       return res.status(500).json({ erro: "Variável OPENAI_KEY não configurada" });
     }
 
-    // 1. Baixar PDF
+    // 1. Baixar o PDF
     const pdfResponse = await axios.get(pdfUrl, { responseType: 'arraybuffer' });
     const pdfBuffer = Buffer.from(pdfResponse.data);
 
@@ -38,6 +38,13 @@ module.exports = async (req, res) => {
 
     const pageImage = await converter(1, true);
     const base64Image = pageImage.base64;
+
+    // 2.1. Verifica se imagem foi gerada corretamente
+    console.log("🖼️ Tamanho da imagem base64:", base64Image?.length);
+    if (!base64Image || base64Image.length < 1000) {
+      console.error("❌ Imagem base64 não gerada corretamente.");
+      return res.status(500).json({ erro: "Imagem não gerada" });
+    }
 
     // 3. Enviar imagem para o Wix
     console.log("📤 Enviando imagem para Wix Media Manager");
@@ -94,7 +101,7 @@ Se não souber alguma informação, use null. Nunca quebre o formato JSON.
 
     const resultado = completion.choices[0].message.content;
 
-    // 6. Retornar resposta
+    // 6. Resposta final
     res.status(200).json({ analise: resultado });
 
   } catch (error) {
