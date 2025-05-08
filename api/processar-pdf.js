@@ -35,6 +35,7 @@ module.exports = async (req, res) => {
         }
       }
     );
+    console.log("📦 Resposta PDF.co:", pdfcoResponse.data);
 
     const imageUrls = pdfcoResponse.data.urls;
     if (!imageUrls || imageUrls.length === 0) {
