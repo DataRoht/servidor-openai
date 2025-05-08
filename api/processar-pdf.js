@@ -37,8 +37,26 @@ module.exports = async (req, res) => {
     console.log("🖼️ Converter inicializado");
 
     const pageImage = await converter(1, true);
-    console.log("✅ Imagem gerada");
     const base64Image = pageImage.base64;
+
+    // 2. Envia a imagem base64 para o backend do Wix
+    console.log("📤 Enviando imagem para Wix Media Manager");
+
+    const wixUploadResponse = await axios.post(
+      "https://www.seusite.com/_functions/salvarImagemBase64",
+      {
+        nomeArquivo: `matricula_${Date.now()}.png`,
+        base64: base64Image
+      },
+      {
+        headers: {
+          Authorization: "Bearer SUA_CHAVE_SECRETA"
+        }
+      }
+    );
+
+    const imageUrl = wixUploadResponse.data;
+    console.log("✅ URL da imagem salva no Wix:", imageUrl);
 
     // 3. Prompt jurídico estruturado
     const prompt = `
@@ -67,7 +85,7 @@ Se não souber alguma informação, use null. Nunca quebre o formato JSON.
           role: "user",
           content: [
             { type: "text", text: prompt },
-            { type: "image_url", image_url: { url: `data:image/png;base64,${base64Image}` } }
+            { type: "image_url", image_url: { url: imageUrl } }
           ]
         }
       ],
