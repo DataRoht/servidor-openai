@@ -1,3 +1,5 @@
+
+// teste para forçar deploy
 const axios = require('axios');
 const { fromBuffer } = require('pdf2pic');
 const OpenAI = require('openai');
