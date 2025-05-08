@@ -4,6 +4,7 @@ const OpenAI = require('openai');
 
 module.exports = async (req, res) => {
   console.log("📥 Função processar-pdf foi chamada!");
+  console.log("🔁 Redeploy forçado em " + new Date().toISOString());
 
   try {
     if (req.method !== "POST") {
