@@ -20,10 +20,10 @@ module.exports = async (req, res) => {
 
     const openaiKey = process.env.OPENAI_KEY;
     if (!openaiKey) {
-      return res.status(500).json({ erro: "Chave OPENAI_KEY não está configurada" });
+      return res.status(500).json({ erro: "Variável OPENAI_KEY não configurada" });
     }
 
-    // 1. Baixar PDF da URL
+    // 1. Baixar PDF
     const pdfResponse = await axios.get(pdfUrl, { responseType: 'arraybuffer' });
     const pdfBuffer = Buffer.from(pdfResponse.data);
 
@@ -39,18 +39,18 @@ module.exports = async (req, res) => {
     const pageImage = await converter(1, true);
     const base64Image = pageImage.base64;
 
-    // 2. Envia a imagem base64 para o backend do Wix
+    // 3. Enviar imagem para o Wix
     console.log("📤 Enviando imagem para Wix Media Manager");
 
     const wixUploadResponse = await axios.post(
-      "https://www.seusite.com/_functions/salvarImagemBase64",
+      "https://www.limpaimovel.com.br/_functions/salvarImagemBase64",
       {
         nomeArquivo: `matricula_${Date.now()}.png`,
         base64: base64Image
       },
       {
         headers: {
-          Authorization: "Bearer SUA_CHAVE_SECRETA"
+          Authorization: "Bearer rafa-wix-upload-2025"
         }
       }
     );
@@ -58,7 +58,7 @@ module.exports = async (req, res) => {
     const imageUrl = wixUploadResponse.data;
     console.log("✅ URL da imagem salva no Wix:", imageUrl);
 
-    // 3. Prompt jurídico estruturado
+    // 4. Prompt jurídico
     const prompt = `
 Você é um especialista jurídico em leilões judiciais de imóveis. A partir da imagem da matrícula fornecida, diga:
 
@@ -75,7 +75,7 @@ Retorne neste formato JSON:
 Se não souber alguma informação, use null. Nunca quebre o formato JSON.
 `;
 
-    // 4. Enviar para GPT-4 Vision
+    // 5. Enviar para OpenAI Vision
     const openai = new OpenAI({ apiKey: openaiKey });
 
     const completion = await openai.chat.completions.create({
@@ -94,9 +94,8 @@ Se não souber alguma informação, use null. Nunca quebre o formato JSON.
 
     const resultado = completion.choices[0].message.content;
 
-    // 5. Retornar texto (Wix irá tentar converter para JSON se possível)
+    // 6. Retornar resposta
     res.status(200).json({ analise: resultado });
-    
 
   } catch (error) {
     console.error("❌ Erro completo:", error);
