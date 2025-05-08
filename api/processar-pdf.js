@@ -3,12 +3,16 @@ const { fromBuffer } = require('pdf2pic');
 const OpenAI = require('openai');
 
 module.exports = async (req, res) => {
+  console.log("📥 Função processar-pdf foi chamada!");
+
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ erro: "Use método POST" });
     }
 
     const { pdfUrl } = req.body;
+    console.log("🧾 URL recebida:", pdfUrl);
+
     if (!pdfUrl) {
       return res.status(400).json({ erro: "pdfUrl ausente no corpo da requisição" });
     }
@@ -29,8 +33,10 @@ module.exports = async (req, res) => {
       width: 1240,
       height: 1754
     });
+    console.log("🖼️ Converter inicializado");
 
     const pageImage = await converter(1, true);
+    console.log("✅ Imagem gerada");
     const base64Image = pageImage.base64;
 
     // 3. Prompt jurídico estruturado
