@@ -1,79 +1,79 @@
 const axios = require('axios');
-const { fromBuffer } = require('pdf2pic');
 const OpenAI = require('openai');
 
 module.exports = async (req, res) => {
-  console.log("📥 Função processar-pdf foi chamada!");
-  console.log("🔁 Redeploy forçado em " + new Date().toISOString());
-
+  console.log("📥 Função processar-pdf (PDF.co + OpenAI) foi chamada!");
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ erro: "Use método POST" });
     }
 
     const { pdfUrl } = req.body;
-    console.log("🧾 URL recebida:", pdfUrl);
-
     if (!pdfUrl) {
       return res.status(400).json({ erro: "pdfUrl ausente no corpo da requisição" });
     }
 
+    const pdfcoKey = process.env.PDFCO_KEY;
     const openaiKey = process.env.OPENAI_KEY;
-    if (!openaiKey) {
-      return res.status(500).json({ erro: "Variável OPENAI_KEY não configurada" });
+    if (!pdfcoKey || !openaiKey) {
+      return res.status(500).json({ erro: "Chaves OPENAI_KEY ou PDFCO_KEY não configuradas" });
     }
 
-    // 1. Baixar o PDF
-    const pdfResponse = await axios.get(pdfUrl, { responseType: 'arraybuffer' });
-    const pdfBuffer = Buffer.from(pdfResponse.data);
-
-    // 2. Converter PDF para imagem (primeira página)
-    const converter = fromBuffer(pdfBuffer, {
-      density: 300,
-      format: "png",
-      width: 1240,
-      height: 1754
-    });
-    console.log("🖼️ Converter inicializado");
-
-    const pageImage = await converter(1, true);
-    const base64Image = pageImage.base64;
-
-    // 2.1. Verifica se imagem foi gerada corretamente
-    console.log("🖼️ Tamanho da imagem base64:", base64Image?.length);
-    if (!base64Image || base64Image.length < 1000) {
-      console.error("❌ Imagem base64 não gerada corretamente.");
-      return res.status(500).json({ erro: "Imagem não gerada" });
-    }
-
-    // 3. Enviar imagem para o Wix
-    console.log("📤 Enviando imagem para Wix Media Manager");
-
-    const wixUploadResponse = await axios.post(
-      "https://www.limpaimovel.com.br/_functions/salvarImagemBase64",
+    // 1. Converter PDF inteiro para imagens via PDF.co
+    console.log("📤 Enviando PDF para PDF.co...");
+    const pdfcoResponse = await axios.post(
+      "https://api.pdf.co/v1/pdf/convert/to/png",
       {
-        nomeArquivo: `matricula_${Date.now()}.png`,
-        base64: base64Image
+        url: pdfUrl,
+        pages: "1-", // todas as páginas
+        async: false
       },
       {
         headers: {
-          Authorization: "Bearer rafa-wix-upload-2025"
+          "x-api-key": pdfcoKey,
+          "Content-Type": "application/json"
         }
       }
     );
 
-    const imageUrl = wixUploadResponse.data;
-    console.log("✅ URL da imagem salva no Wix:", imageUrl);
+    const imageUrls = pdfcoResponse.data.urls;
+    if (!imageUrls || imageUrls.length === 0) {
+      throw new Error("Nenhuma imagem foi gerada pelo PDF.co.");
+    }
+    console.log(`✅ ${imageUrls.length} página(s) convertida(s) para imagem.`);
 
-    // 4. Prompt jurídico
+    // 2. Enviar cada imagem para o Wix e coletar URLs públicas
+    const wixUploads = await Promise.all(imageUrls.map(async (imgUrl, index) => {
+      const imageResponse = await axios.get(imgUrl, { responseType: "arraybuffer" });
+      const base64 = Buffer.from(imageResponse.data).toString("base64");
+
+      const uploadResponse = await axios.post(
+        "https://www.limpaimovel.com.br/_functions/salvarImagemBase64",
+        {
+          nomeArquivo: `matricula_page_${index + 1}.png`,
+          base64
+        },
+        {
+          headers: {
+            Authorization: "Bearer rafa-wix-upload-2025"
+          }
+        }
+      );
+
+      return uploadResponse.data;
+    }));
+
+    console.log("✅ Todas as imagens salvas no Wix com URLs públicas.");
+
+    // 3. Montar o prompt jurídico
     const prompt = `
-Você é um especialista jurídico em leilões judiciais de imóveis. A partir da imagem da matrícula fornecida, diga:
+Você é um especialista jurídico em leilões judiciais de imóveis. A partir da matrícula (convertida em imagens), diga:
 
 1. Quem são os co-proprietários atuais e seus CPFs?
 2. Quantas averbações existem?
 3. Faça uma análise técnica da matrícula com parecer profissional.
 
-Retorne neste formato JSON:
+Responda neste formato JSON:
 {
   "coProprietarios": "<em>Lista formatada em HTML</em>",
   "numeroAverbacoes": <número>,
@@ -82,7 +82,7 @@ Retorne neste formato JSON:
 Se não souber alguma informação, use null. Nunca quebre o formato JSON.
 `;
 
-    // 5. Enviar para OpenAI Vision
+    // 4. Enviar para o GPT-4 Vision
     const openai = new OpenAI({ apiKey: openaiKey });
 
     const completion = await openai.chat.completions.create({
@@ -92,16 +92,17 @@ Se não souber alguma informação, use null. Nunca quebre o formato JSON.
           role: "user",
           content: [
             { type: "text", text: prompt },
-            { type: "image_url", image_url: { url: imageUrl } }
+            ...wixUploads.map(url => ({
+              type: "image_url",
+              image_url: { url }
+            }))
           ]
         }
       ],
-      max_tokens: 1000
+      max_tokens: 1500
     });
 
     const resultado = completion.choices[0].message.content;
-
-    // 6. Resposta final
     res.status(200).json({ analise: resultado });
 
   } catch (error) {
