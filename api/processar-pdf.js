@@ -73,10 +73,10 @@ Se não souber alguma informação, use null. Nunca quebre o formato JSON.
     res.status(200).json({ analise: resultado });
 
   } catch (error) {
-    console.error("Erro completo:", error);
+    console.error("❌ Erro completo:", error);
     res.status(500).json({
       erro: "Erro interno ao processar o PDF",
-      detalhes: error.message
+      detalhes: error.message || String(error)
     });
   }
 };
