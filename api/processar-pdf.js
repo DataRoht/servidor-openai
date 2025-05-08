@@ -2,7 +2,7 @@ const axios = require('axios');
 const OpenAI = require('openai');
 
 module.exports = async (req, res) => {
-  console.log("📥 Função processar-pdf (PDF.co + OpenAI) foi chamada!");
+  console.log("📥 Função processar-pdf simplificada foi chamada!");
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ erro: "Use método POST" });
@@ -19,13 +19,13 @@ module.exports = async (req, res) => {
       return res.status(500).json({ erro: "Chaves OPENAI_KEY ou PDFCO_KEY não configuradas" });
     }
 
-    // 1. Converter PDF inteiro para imagens via PDF.co
+    // 1. Converter PDF em imagens (todas as páginas)
     console.log("📤 Enviando PDF para PDF.co...");
     const pdfcoResponse = await axios.post(
       "https://api.pdf.co/v1/pdf/convert/to/png",
       {
         url: pdfUrl,
-        pages: "1-", // todas as páginas
+        pages: "1-", // Todas as páginas
         async: false
       },
       {
@@ -40,33 +40,9 @@ module.exports = async (req, res) => {
     if (!imageUrls || imageUrls.length === 0) {
       throw new Error("Nenhuma imagem foi gerada pelo PDF.co.");
     }
-    console.log(`✅ ${imageUrls.length} página(s) convertida(s) para imagem.`);
+    console.log(`✅ ${imageUrls.length} página(s) convertida(s). URLs:`, imageUrls);
 
-    // 2. Enviar cada imagem para o Wix e coletar URLs públicas
-    const wixUploads = await Promise.all(imageUrls.map(async (imgUrl, index) => {
-      const imageResponse = await axios.get(imgUrl, { responseType: "arraybuffer" });
-      const base64 = Buffer.from(imageResponse.data).toString("base64");
-
-      const uploadResponse = await axios.post(
-        "https://www.limpaimovel.com.br/_functions/salvarImagemBase64",
-        {
-          nomeArquivo: `matricula_page_${index + 1}.png`,
-          base64: `data:image/png;base64,${base64}`
-        },
-        {
-          headers: {
-            "Authorization": "Bearer rafa-wix-upload-2025",
-            "Content-Type": "application/json"  // ✅ Isso é essencial
-          }
-        }
-      );
-
-      return uploadResponse.data;
-    }));
-
-    console.log("✅ Todas as imagens salvas no Wix com URLs públicas.");
-
-    // 3. Montar o prompt jurídico
+    // 2. Montar o prompt
     const prompt = `
 Você é um especialista jurídico em leilões judiciais de imóveis. A partir da matrícula (convertida em imagens), diga:
 
@@ -80,23 +56,19 @@ Responda neste formato JSON:
   "numeroAverbacoes": <número>,
   "analise": "<em>Texto formatado em HTML com a análise</em>"
 }
-Se não souber alguma informação, use null. Nunca quebre o formato JSON.
-`;
+Se não souber alguma informação, use null. Nunca quebre o formato JSON.`;
 
-    // 4. Enviar para o GPT-4 Vision
+    // 3. Enviar para OpenAI Vision
     const openai = new OpenAI({ apiKey: openaiKey });
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4-turbo",
+      model: "gpt-4-vision-preview",
       messages: [
         {
           role: "user",
           content: [
             { type: "text", text: prompt },
-            ...wixUploads.map(url => ({
-              type: "image_url",
-              image_url: { url }
-            }))
+            ...imageUrls.map(url => ({ type: "image_url", image_url: { url } }))
           ]
         }
       ],
@@ -104,13 +76,12 @@ Se não souber alguma informação, use null. Nunca quebre o formato JSON.
     });
 
     const resultado = completion.choices[0].message.content;
+    console.log("✅ Resultado recebido da OpenAI");
     res.status(200).json({ analise: resultado });
 
   } catch (error) {
-    console.error("❌ Erro completo:", error);
-    res.status(500).json({
-      erro: "Erro interno ao processar o PDF",
-      detalhes: error.message || String(error)
-    });
+    console.error("❌ Erro geral:", error);
+    res.status(500).json({ erro: "Erro ao processar PDF", detalhes: error.message });
   }
 };
+
