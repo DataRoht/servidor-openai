@@ -49,14 +49,14 @@ module.exports = async (req, res) => {
 
       const uploadResponse = await axios.post(
         "https://www.limpaimovel.com.br/_functions/salvarImagemBase64",
-        JSON.stringify({
+        {
           nomeArquivo: `matricula_page_${index + 1}.png`,
           base64: `data:image/png;base64,${base64}`
-        }),
+        },
         {
           headers: {
             "Authorization": "Bearer rafa-wix-upload-2025",
-            "Content-Type": "application/json"  // 👈 ESSENCIAL
+            "Content-Type": "application/json"  // ✅ Isso é essencial
           }
         }
       );
