@@ -207,21 +207,30 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "ANTHROPIC_API_KEY não configurada no Vercel" });
   }
 
-  // Ler arquivo via multipart
+  // Ler arquivo — aceita octet-stream (Wix) ou multipart/form-data
   let fileBuffer = null;
   try {
-    fileBuffer = await new Promise((resolve, reject) => {
-      const bb = busboy({ headers: req.headers, limits: { fileSize: 50 * 1024 * 1024 } });
-      const chunks = [];
-      bb.on("file", (_, file) => {
-        file.on("data", (d) => chunks.push(d));
-        file.on("end", () => resolve(Buffer.concat(chunks)));
-        file.on("error", reject);
+    const contentType = req.headers["content-type"] || "";
+    if (contentType.includes("octet-stream")) {
+      fileBuffer = await new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on("data", (d) => chunks.push(d));
+        req.on("end", () => resolve(Buffer.concat(chunks)));
+        req.on("error", reject);
       });
-      bb.on("error", reject);
-      bb.on("close", () => { if (!fileBuffer) reject(new Error("Nenhum arquivo recebido")); });
-      req.pipe(bb);
-    });
+    } else {
+      fileBuffer = await new Promise((resolve, reject) => {
+        const bb = busboy({ headers: req.headers, limits: { fileSize: 50 * 1024 * 1024 } });
+        const chunks = [];
+        bb.on("file", (_, file) => {
+          file.on("data", (d) => chunks.push(d));
+          file.on("end", () => resolve(Buffer.concat(chunks)));
+          file.on("error", reject);
+        });
+        bb.on("error", reject);
+        req.pipe(bb);
+      });
+    }
   } catch (e) {
     return res.status(400).json({ error: `Erro ao receber arquivo: ${e.message}` });
   }
