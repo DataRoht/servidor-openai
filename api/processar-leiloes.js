@@ -3,21 +3,25 @@
  * Endpoint: POST /api/processar-leiloes
  *
  * Fluxo:
- *  1. Recebe a downloadUrl do arquivo Excel (enviada pelo Wix backend)
- *  2. Responde imediatamente com 200 "processando" (evita timeout do Wix)
- *  3. Processa em background: regex → IA → chama webhook do Wix com os resultados
+ *  1. Recebe downloadUrl + filtros do Wix backend
+ *  2. Responde imediatamente 200 (evita timeout do Wix)
+ *  3. Em background:
+ *     - Baixa o Excel
+ *     - Filtra só judiciais com processo CNJ
+ *     - Fase 1: regex para candidatos a fração
+ *     - Fase 2: IA extrai e enriquece campos
+ *     - Chama webhook do Wix com os resultados
  *
  * Variáveis de ambiente no Vercel:
- *   ANTHROPIC_API_KEY   — chave da API da Anthropic
- *   WIX_WEBHOOK_URL     — URL do webhook Wix, ex:
- *                         https://www.dataroht.com/_functions/receberLeiloes
- *   WIX_WEBHOOK_SECRET  — segredo compartilhado (dataroht-leiloes-2024)
+ *   ANTHROPIC_API_KEY    — chave da Anthropic
+ *   WIX_WEBHOOK_URL      — https://www.dataroht.com/_functions/receberLeiloes
+ *   WIX_WEBHOOK_SECRET   — dataroht-leiloes-2024
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import * as XLSX from "xlsx";
 
-// ─── Colunas do Excel SPY ────────────────────────────────────────────────────
+// ─── Índices das colunas no Excel SPY ───────────────────────────────────────
 const COL = {
   titulo: 0, estado: 1, cidade: 2, processo: 3, link: 4,
   preco1: 5, preco2: 6, data1: 7, data2: 8,
@@ -27,7 +31,18 @@ const COL = {
   descricao: 23,
 };
 
-// ─── Fase 1: Regex ────────────────────────────────────────────────────────────
+// ─── Filtro: só judiciais com processo CNJ ───────────────────────────────────
+function filtrarJudiciais(rows) {
+  return rows.filter((row) => {
+    const tipo = String(row[COL.tipo] || "").toLowerCase().trim();
+    const processo = String(row[COL.processo] || "").trim();
+    const ehJudicial = tipo.includes("judicial") && !tipo.includes("extra");
+    const temProcesso = processo.length > 5;
+    return ehJudicial && temProcesso;
+  });
+}
+
+// ─── Fase 1: Regex — candidatos a fração ────────────────────────────────────
 const POSITIVOS = [
   /fra[çc][aã]o\s+ideal\s+(de\s+)?(\d+[,.]\d+\s*%|\d+\/\d+)/i,
   /parte\s+ideal\s+(de\s+)?(\d+[,.]\d+\s*%|\d+\/\d+)/i,
@@ -60,13 +75,16 @@ function fase1Regex(rows) {
   return candidatos;
 }
 
-// ─── Fase 2: IA ───────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `Você é especialista em leilões judiciais e extrajudiciais de imóveis no Brasil.
+// ─── Fase 2: IA — extrai e enriquece campos ──────────────────────────────────
+const SYSTEM_PROMPT = `Você é especialista em leilões judiciais de imóveis no Brasil.
 
 CRITÉRIO — É FRAÇÃO:
 Fração = uma PARTE do imóvel sendo leiloada (copropriedade), não o imóvel inteiro.
 ✓ "50% de um apartamento", "1/3 do imóvel", "fração ideal de 25%", direitos hereditários, meação
 ✗ Imóvel inteiro, "entrada de 25%", "desconto de 46%", "fração de 337/1.000.000 do terreno" (técnico de matrícula)
+
+Extraia o máximo de informações do título e descrição.
+Quando não houver dado explícito: null para textos e números, false para booleanos.
 
 Responda SOMENTE com JSON válido:
 {
@@ -75,8 +93,14 @@ Responda SOMENTE com JSON válido:
       "id": <número>,
       "eUmLeilaoFracao": true/false,
       "fracaoQtd": "50%" ou "1/3" ou null,
-      "observacoes": "frase curta e objetiva para o time de compras",
-      "confianca": "alta" | "media" | "baixa"
+      "matricula": "número da matrícula ou null",
+      "cartorioRegistro": "nome do cartório ou null",
+      "valorImovel": valor numérico total do imóvel ou null,
+      "quantasRestricoes": número inteiro de restrições judiciais ou 0,
+      "debitoIptu": true/false,
+      "outrasDividas": true/false,
+      "dividaLimpa": true/false,
+      "observacoes": "resumo objetivo para o time de compras — mencione fração, localização e estado do imóvel"
     }
   ]
 }`;
@@ -90,7 +114,7 @@ async function fase2IA(candidatos, client) {
     const lote = candidatos.slice(i, i + BATCH);
     const linhas = lote.map((item, idx) => {
       const r = item.row;
-      const desc = String(r[COL.descricao] || "").slice(0, 500);
+      const desc = String(r[COL.descricao] || "").slice(0, 600);
       return `--- LEILÃO ${i + idx} ---\nTÍTULO: ${r[COL.titulo] || ""}\nDESCRIÇÃO: ${desc}`;
     });
 
@@ -100,7 +124,7 @@ async function fase2IA(candidatos, client) {
         model: "claude-haiku-4-5-20251001",
         max_tokens: 2000,
         system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: `Classifique:\n\n${linhas.join("\n\n")}` }],
+        messages: [{ role: "user", content: `Classifique e extraia:\n\n${linhas.join("\n\n")}` }],
       });
       const texto = resp.content[0].text.replace(/```json|```/g, "").trim();
       parsed = JSON.parse(texto);
@@ -140,6 +164,7 @@ function montarLeilao(item) {
   const d2 = parseData(r[COL.data2]);
   const dataleilao = (d1 && d1 >= hoje) ? d1 : (d2 || d1);
 
+  // Dívidas da SPY como fallback
   const divIptu = Number(r[COL.divIptu]) || 0;
   const divCond = Number(r[COL.divCond]) || 0;
   const debFid  = Number(r[COL.debFid])  || 0;
@@ -147,6 +172,7 @@ function montarLeilao(item) {
   const temOutrasDividas = divCond > 0 || debFid > 0;
 
   return {
+    // Campos diretos da SPY
     titulo:    String(r[COL.titulo]    || ""),
     estado:    String(r[COL.estado]    || ""),
     cidade:    String(r[COL.cidade]    || ""),
@@ -163,56 +189,77 @@ function montarLeilao(item) {
     leiloeiro: String(r[COL.leiloeiro] || ""),
     tipoBem:   String(r[COL.tipoBem]   || ""),
     avaliacao: Number(r[COL.avaliacao]) || null,
-    matricula: String(r[COL.matricula] || ""),
     ocupado:   String(r[COL.ocupado]   || ""),
     descricao: String(r[COL.descricao] || "").slice(0, 5000),
     lote:      String(r[COL.titulo]    || "").slice(0, 100),
-    debitoIptu:    temDebitoIptu,
-    outrasDividas: temOutrasDividas,
-    dividaLimpa:   !temDebitoIptu && !temOutrasDividas,
-    eUmLeilaoFracao: ia.eUmLeilaoFracao ?? true,
-    fracaoQtd:       ia.fracaoQtd  || null,
-    observacoes:     ia.observacoes || null,
+
+    // Campos enriquecidos pela IA (com fallback nos dados da SPY)
+    eUmLeilaoFracao:  ia.eUmLeilaoFracao  ?? true,
+    fracaoQtd:        ia.fracaoQtd        || null,
+    matricula:        ia.matricula        || String(r[COL.matricula] || "") || null,
+    cartorioRegistro: ia.cartorioRegistro || null,
+    valorImovel:      ia.valorImovel      || Number(r[COL.avaliacao]) || null,
+    quantasRestricoes: ia.quantasRestricoes ?? 0,
+    debitoIptu:       ia.debitoIptu       ?? temDebitoIptu,
+    outrasDividas:    ia.outrasDividas    ?? temOutrasDividas,
+    dividaLimpa:      ia.dividaLimpa      ?? (!temDebitoIptu && !temOutrasDividas),
+    observacoes:      ia.observacoes      || null,
+
+    // Padrão: oculto até o time de compras revisar
     visivel: false,
   };
 }
 
-// ─── Processamento em background ──────────────────────────────────────────────
-async function processarBackground(downloadUrl, apiKey, wixWebhookUrl, wixSecret) {
+// ─── Processamento em background ─────────────────────────────────────────────
+async function processarBackground(downloadUrl, filtros, apiKey, wixWebhookUrl, wixSecret) {
   console.log("🚀 Iniciando processamento em background...");
   try {
-    // Baixar o arquivo Excel
+    // Baixar Excel
     const fileResp = await fetch(downloadUrl);
     if (!fileResp.ok) throw new Error(`Erro ao baixar arquivo: ${fileResp.status}`);
     const arrayBuf = await fileResp.arrayBuffer();
     const fileBuffer = Buffer.from(arrayBuf);
 
-    // Fase 1: regex
+    // Ler linhas
     const wb = XLSX.read(fileBuffer, { type: "buffer" });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }).slice(1);
-    const totalEntrada = rows.length;
-    console.log(`📊 ${totalEntrada} linhas lidas`);
+    const todasLinhas = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }).slice(1);
+    console.log(`📊 ${todasLinhas.length} linhas lidas`);
 
-    const candidatos = fase1Regex(rows);
+    // Filtro 1: só judiciais com processo CNJ
+    const judiciais = filtros?.apenasJudicial !== false ? filtrarJudiciais(todasLinhas) : todasLinhas;
+    console.log(`⚖️ ${judiciais.length} judiciais com processo CNJ`);
+
+    // Filtro 2: regex para candidatos a fração
+    const candidatos = fase1Regex(judiciais);
     console.log(`🔍 ${candidatos.length} candidatos após regex`);
+
+    if (candidatos.length === 0) {
+      console.log("ℹ️ Nenhum candidato a fração encontrado.");
+      await fetch(wixWebhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leiloes: [], stats: { totalEntrada: todasLinhas.length, judiciais: judiciais.length, candidatosRegex: 0, confirmadosIA: 0 }, secret: wixSecret }),
+      });
+      return;
+    }
 
     // Fase 2: IA
     const client = new Anthropic({ apiKey });
     const { confirmados, rejeitados } = await fase2IA(candidatos, client);
-    console.log(`🤖 ${confirmados.length} confirmados pela IA`);
+    console.log(`🤖 ${confirmados.length} confirmados pela IA, ${rejeitados.length} rejeitados`);
 
     const leiloes = confirmados.map(montarLeilao);
 
     const stats = {
-      totalEntrada,
+      totalEntrada: todasLinhas.length,
+      judiciais: judiciais.length,
       candidatosRegex: candidatos.length,
       confirmadosIA: confirmados.length,
       rejeitadosIA: rejeitados.length,
-      descartadosRegex: totalEntrada - candidatos.length,
     };
 
-    // Chamar webhook do Wix com os resultados
+    // Chamar webhook do Wix
     console.log(`📤 Enviando ${leiloes.length} leilões para o Wix...`);
     const wixResp = await fetch(wixWebhookUrl, {
       method: "POST",
@@ -221,8 +268,7 @@ async function processarBackground(downloadUrl, apiKey, wixWebhookUrl, wixSecret
     });
 
     if (!wixResp.ok) {
-      const erro = await wixResp.text();
-      console.error(`❌ Erro no webhook Wix: ${wixResp.status} — ${erro.slice(0, 200)}`);
+      console.error(`❌ Erro no webhook Wix: ${wixResp.status}`);
     } else {
       const resultado = await wixResp.json();
       console.log(`✅ Wix inseriu ${resultado.inseridos} leilões, ${resultado.duplicatas} duplicatas`);
@@ -230,16 +276,11 @@ async function processarBackground(downloadUrl, apiKey, wixWebhookUrl, wixSecret
 
   } catch (e) {
     console.error("❌ Erro no processamento background:", e.message);
-    // Tentar notificar o Wix do erro
     try {
       await fetch(wixWebhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leiloes: [],
-          stats: { erro: e.message },
-          secret: wixSecret,
-        }),
+        body: JSON.stringify({ leiloes: [], stats: { erro: e.message }, secret: wixSecret }),
       });
     } catch (_) {}
   }
@@ -263,9 +304,11 @@ export default async function handler(req, res) {
   const downloadUrl = body?.downloadUrl;
   if (!downloadUrl) return res.status(400).json({ error: "downloadUrl não informada" });
 
+  const filtros = body?.filtros || {};
+
   // Responde imediatamente — evita timeout do Wix
   res.status(200).json({ ok: true, mensagem: "Processamento iniciado em background" });
 
   // Processa de forma assíncrona após responder
-  processarBackground(downloadUrl, apiKey, wixWebhookUrl, wixSecret);
+  processarBackground(downloadUrl, filtros, apiKey, wixWebhookUrl, wixSecret);
 }
