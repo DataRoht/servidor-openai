@@ -207,30 +207,17 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "ANTHROPIC_API_KEY não configurada no Vercel" });
   }
 
-  // Ler arquivo — aceita octet-stream (Wix) ou multipart/form-data
+  // Receber URL de download enviada pelo Wix
   let fileBuffer = null;
   try {
-    const contentType = req.headers["content-type"] || "";
-    if (contentType.includes("octet-stream")) {
-      fileBuffer = await new Promise((resolve, reject) => {
-        const chunks = [];
-        req.on("data", (d) => chunks.push(d));
-        req.on("end", () => resolve(Buffer.concat(chunks)));
-        req.on("error", reject);
-      });
-    } else {
-      fileBuffer = await new Promise((resolve, reject) => {
-        const bb = busboy({ headers: req.headers, limits: { fileSize: 50 * 1024 * 1024 } });
-        const chunks = [];
-        bb.on("file", (_, file) => {
-          file.on("data", (d) => chunks.push(d));
-          file.on("end", () => resolve(Buffer.concat(chunks)));
-          file.on("error", reject);
-        });
-        bb.on("error", reject);
-        req.pipe(bb);
-      });
-    }
+    const body = req.body;
+    const downloadUrl = body?.downloadUrl;
+    if (!downloadUrl) return res.status(400).json({ error: "downloadUrl não informada" });
+
+    const fileResp = await fetch(downloadUrl);
+    if (!fileResp.ok) throw new Error(`Erro ao baixar arquivo: ${fileResp.status}`);
+    const arrayBuf = await fileResp.arrayBuffer();
+    fileBuffer = Buffer.from(arrayBuf);
   } catch (e) {
     return res.status(400).json({ error: `Erro ao receber arquivo: ${e.message}` });
   }
@@ -251,8 +238,8 @@ export default async function handler(req, res) {
       stats: {
         totalEntrada,
         candidatosRegex: candidatos.length,
-        confirmadosIA:   confirmados.length,
-        rejeitadosIA:    rejeitados.length,
+        confirmadosIA: confirmados.length,
+        rejeitadosIA: rejeitados.length,
         descartadosRegex: totalEntrada - candidatos.length,
       },
       leiloes,
