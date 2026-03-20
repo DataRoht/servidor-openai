@@ -36,7 +36,7 @@ app.post("/processar-leiloes", async (req, res) => {
     .catch(err => console.error("❌ Erro fatal no background:", err.message));
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 DataRoht Leilões SPY rodando na porta ${PORT}`));
 
 // ─── Índices das colunas no Excel SPY ────────────────────────────────────────
