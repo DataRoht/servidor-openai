@@ -7,7 +7,12 @@ app.use(express.json({ limit: "50mb" }));
 
 // ─── Health check — Railway usa pra saber se está vivo ───────────────────────
 app.get("/", (_req, res) => {
-  res.json({ status: "ok", servico: "DataRoht Leilões SPY" });
+  res.json({
+    status: "ok",
+    servico: "DataRoht Leilões SPY",
+    temApiKey: !!process.env.ANTHROPIC_API_KEY,
+    temWebhook: !!process.env.WIX_WEBHOOK_URL,
+  });
 });
 
 // ─── Rota principal ───────────────────────────────────────────────────────────
