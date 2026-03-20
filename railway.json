@@ -1,0 +1,36 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "node server.js",
+    "healthcheckPath": "/",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
+```
+
+---
+
+## FASE 3 — Configurar variáveis de ambiente no Railway
+
+No painel Railway → seu projeto → aba **"Variables"** → adicione as 3 variáveis:
+
+| Variável | Valor |
+|---|---|
+| `ANTHROPIC_API_KEY` | sua chave `sk-ant-...` (mesma do Vercel) |
+| `WIX_WEBHOOK_URL` | `https://www.dataroht.com/_functions/receberLeiloes` |
+| `WIX_WEBHOOK_SECRET` | `dataroht-leiloes-2024` |
+
+> O `PORT` **não precisa adicionar** — Railway injeta automaticamente.
+
+---
+
+## FASE 4 — Pegar a URL do Railway e atualizar o Wix
+
+**1.** Após o deploy, no painel Railway → aba **"Settings"** → seção **"Domains"** → clique em **"Generate Domain"**
+
+Vai gerar algo como:
+```
+servidor-openai-production.up.railway.app
