@@ -12,6 +12,9 @@ app.get("/", (_req, res) => {
     servico: "DataRoht Leilões SPY",
     temApiKey: !!process.env.ANTHROPIC_API_KEY,
     temWebhook: !!process.env.WIX_WEBHOOK_URL,
+    portaUsada: process.env.PORT,
+    nodeEnv: process.env.NODE_ENV,
+    todasVars: Object.keys(process.env).filter(k => !k.includes('npm') && !k.includes('NODE')),
   });
 });
 
